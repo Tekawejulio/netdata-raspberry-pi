@@ -1,0 +1,174 @@
+
+Monitoring en temps réel avec Netdata sur Raspberry Pi 5
+Installation de Netdata sur un Raspberry Pi 5 pour surveiller en direct l'état du système : processeur, mémoire, disque, réseau et services. Ce document explique la démarche, la structure de l'installation, les commandes utiles et les petits problèmes rencontrés.
+
+Sommaire
+Présentation
+Architecture
+Prérequis
+Installation expliquée
+Structure de l'installation
+Accéder au tableau de bord
+Lire les graphiques
+Commandes utiles
+Problèmes rencontrés et solutions
+Consommation de ressources
+Sécurité
+Évolutions possibles
+Compétences mises en pratique
+Auteur
+1. Présentation
+Netdata est un outil de supervision (monitoring) open source. Il collecte des centaines de métriques par seconde sur une machine et les affiche sous forme de graphiques dans une interface web, sans configuration compliquée.
+
+Objectifs du projet :
+
+disposer d'un tableau de bord en temps réel pour surveiller le Raspberry Pi ;
+repérer rapidement une surcharge (processeur, mémoire, disque, réseau) ;
+comprendre le fonctionnement d'un outil de supervision, compétence utile en administration systèmes et réseaux ;
+documenter l'installation pour qu'elle soit reproductible.
+C'est le premier projet réalisé sur le Pi, avant les services déployés avec Docker (Pi-hole, Nextcloud, Jellyfin) : Netdata permet justement de voir leur impact sur la machine.
+
+2. Architecture
+   PC / téléphone                          Raspberry Pi 5
+ ┌───────────────────┐   HTTP :19999   ┌──────────────────────────────┐
+ │ Navigateur web    │ ──────────────► │  Service systemd "netdata"   │
+ │                   │                 │   ├─ agent principal         │
+ │ Tableau de bord   │ ◄────────────── │   ├─ plugins de collecte     │
+ └───────────────────┘   graphiques    │   │   (CPU, RAM, disque,     │
+                                       │   │    réseau, services...)  │
+                                       │   └─ base de données locale  │
+                                       │       (historique)           │
+                                       └──────────────────────────────┘
+L'agent Netdata tourne en permanence comme service systemd. Ses plugins lisent les compteurs du système (via /proc, /sys, etc.), stockent l'historique dans une base locale et servent l'interface web sur le port 19999.
+
+3. Prérequis
+Élément	Détail
+Matériel	Raspberry Pi 5 (4 Go de RAM)
+Système	Raspberry Pi OS Lite 64 bits (Debian Trixie)
+Réseau	Pi connecté en Ethernet au réseau local
+Accès	Connexion SSH fonctionnelle, système à jour
+Droits	Un utilisateur avec sudo
+Mettre le système à jour avant d'installer :
+
+bash
+sudo apt update && sudo apt full-upgrade -y
+4. Installation expliquée
+Netdata a été installé avec le script officiel « kickstart » :
+
+bash
+wget -O /tmp/netdata-kickstart.sh https://get.netdata.cloud/kickstart.sh
+sh /tmp/netdata-kickstart.sh --install-type any
+Élément	Explication
+wget -O /tmp/netdata-kickstart.sh ...	Télécharge le script d'installation dans /tmp, au lieu de l'exécuter directement. On peut ainsi le lire avant de le lancer (less /tmp/netdata-kickstart.sh).
+sh /tmp/netdata-kickstart.sh	Exécute le script, qui détecte le système et choisit la méthode d'installation.
+--install-type any	Autorise n'importe quel type d'installation. Sur ce système, le script a installé une version « static build » : un paquet autonome qui embarque ses dépendances.
+Pourquoi un static build ? Tout est regroupé dans un seul dossier (/opt/netdata), ce qui évite de dépendre des paquets du système et simplifie la désinstallation.
+
+Le service est ensuite activé au démarrage et lancé automatiquement :
+
+bash
+sudo systemctl status netdata --no-pager
+Le résultat attendu est Active: active (running).
+
+5. Structure de l'installation
+Avec un static build, tous les fichiers de Netdata se trouvent sous /opt/netdata :
+
+/opt/netdata/
+├── bin/              <- exécutables (agent netdata)
+├── sbin/
+├── etc/netdata/      <- CONFIGURATION
+│   ├── netdata.conf  <- fichier de configuration principal
+│   ├── edit-config   <- script pour modifier proprement un fichier de config
+│   ├── go.d/         <- configuration des collecteurs (services surveillés)
+│   ├── health.d/     <- règles d'alertes
+│   ├── python.d/, charts.d/, statsd.d/, otel.d/
+│   ├── ssl/          <- certificats (ne jamais versionner)
+│   └── orig/         <- copies des fichiers de configuration d'origine
+├── usr/libexec/netdata/plugins.d/   <- plugins de collecte
+├── var/              <- données, logs, base de métriques
+└── share/, usr/, system/            <- ressources et fichiers de service
+À retenir :
+
+La configuration est dans /opt/netdata/etc/netdata.
+Pour modifier un fichier de configuration, on utilise edit-config plutôt que de le copier à la main.
+Les alertes sont définies dans health.d/.
+6. Accéder au tableau de bord
+Dans un navigateur, sur un appareil du même réseau :
+
+http://<IP-DU-PI>:19999
+Il faut utiliser http (et non https). Pour connaître l'adresse IP du Pi :
+
+bash
+hostname -I
+7. Lire les graphiques
+Le tableau de bord se lit par sections :
+
+Système / CPU : charge du processeur, en pourcentage et par cœur. Un pic de courte durée est normal, une charge constante proche de 100 % indique une surcharge.
+Mémoire : mémoire utilisée, en cache et libre. La mémoire « en cache » est récupérable, ce n'est pas une fuite.
+Disques : espace utilisé et vitesse de lecture/écriture. Utile pour surveiller le remplissage de la carte microSD.
+Réseau : débit entrant et sortant de l'interface Ethernet.
+Température : à surveiller, car le Pi 5 ralentit volontairement (throttling) quand il chauffe trop.
+Alertes : Netdata signale automatiquement certaines anomalies (disque presque plein, charge anormale...).
+Chaque graphique est interactif : on peut survoler une courbe pour lire la valeur exacte et zoomer sur une période.
+
+8. Commandes utiles
+bash
+# État du service
+sudo systemctl status netdata --no-pager
+
+# Démarrer, arrêter, redémarrer
+sudo systemctl start netdata
+sudo systemctl stop netdata
+sudo systemctl restart netdata
+
+# Lancer au démarrage / désactiver
+sudo systemctl enable netdata
+sudo systemctl disable netdata
+
+# Voir les logs récents
+sudo journalctl -u netdata --since "1 hour ago" --no-pager
+
+# Contenu de la configuration
+ls /opt/netdata/etc/netdata
+
+# Afficher seulement les lignes actives de netdata.conf (sans les commentaires)
+grep -v '^\s*#' /opt/netdata/etc/netdata/netdata.conf | grep -v '^\s*$'
+
+# Vérifier que le port répond
+curl -I http://localhost:19999
+9. Problèmes rencontrés et solutions
+Problème	Cause	Solution
+Message répété dans les logs : start watching '/opt/netdata/etc/netdata/scripts.d': no such file or directory	Le plugin scripts.d surveille un dossier de configuration qui n'existe pas encore. Ce n'est pas une panne.	Créer le dossier : sudo mkdir -p /opt/netdata/etc/netdata/scripts.d puis sudo systemctl restart netdata.
+Page inaccessible sur :19999	Service arrêté, ou mauvaise adresse.	Vérifier systemctl status netdata, l'IP du Pi (hostname -I) et utiliser http://.
+Installation refusée ou incomplète	Droits insuffisants, système non à jour.	Lancer avec un utilisateur sudo, faire apt update && apt full-upgrade avant.
+10. Consommation de ressources
+Netdata est léger par rapport à ce qu'il fait, mais il n'est pas gratuit : il lance de nombreux plugins et conserve un historique en mémoire et sur disque.
+
+Sur ce Pi (4 Go de RAM), après quelques heures de fonctionnement, systemctl status netdata indiquait une utilisation mémoire de l'ordre de 800 Mo. C'est une part importante des 4 Go disponibles quand d'autres services tournent en parallèle (Pi-hole, Nextcloud, Jellyfin).
+
+Pistes pour réduire l'empreinte :
+
+désactiver les plugins inutiles dans netdata.conf ;
+réduire la durée de rétention de l'historique ;
+surveiller la mémoire globale et arrêter Netdata s'il gêne les autres services.
+11. Sécurité
+Le tableau de bord est en HTTP sans mot de passe : il doit rester accessible uniquement depuis le réseau local. Ne pas ouvrir le port 19999 vers Internet.
+Les métriques révèlent des informations sur la machine (services, charge, réseau) : ne pas les exposer publiquement.
+Si un compte Netdata Cloud est lié à l'agent, le jeton de rattachement (claim token) est un secret : ne jamais le publier.
+Dans ce dépôt, ne pas versionner ssl/ (certificats) ni cloud.d/ (identifiants cloud).
+Pour un accès à distance, passer par un VPN (par exemple WireGuard) plutôt que d'ouvrir un port.
+12. Évolutions possibles
+Ajouter des alertes par e-mail ou messagerie (dossier health.d/).
+Surveiller les conteneurs Docker (Pi-hole, Nextcloud, Jellyfin) et voir leur consommation individuelle.
+Placer Netdata derrière un reverse proxy avec HTTPS et authentification.
+Centraliser plusieurs machines sur un même tableau de bord.
+Comparer avec d'autres outils de supervision (Prometheus + Grafana, Zabbix).
+13. Compétences mises en pratique
+Installation et vérification d'un service systemd
+Administration Linux en ligne de commande (SSH, systemctl, journalctl, wget)
+Lecture et analyse de logs pour distinguer une vraie panne d'un simple avertissement
+Notions de supervision : métriques système, alertes, seuils
+Compréhension de l'arborescence d'une application installée dans /opt
+Documentation technique et gestion de versions avec Git/GitHub
+14. Auteur
+Julio Tekawe 
